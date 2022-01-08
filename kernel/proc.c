@@ -20,6 +20,8 @@ static void wakeup1(struct proc *chan);
 static void freeproc(struct proc *p);
 
 extern char trampoline[]; // trampoline.S
+extern char etext[];
+extern pagetable_t kernel_pagetable;
 
 // initialize the proc table at boot time.
 void
@@ -121,6 +123,17 @@ found:
     return 0;
   }
 
+  p->kernel_pagetable = pkvminit();
+  if(p->kernel_pagetable == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+
+  pte_t* pte = walk(kernel_pagetable, p->kstack, 0);
+  uint64 pa = PTE2PA(*pte);
+  pkvmmap(p->kernel_pagetable, p->kstack, pa, PGSIZE, PTE_R | PTE_W);
+
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
@@ -141,7 +154,10 @@ freeproc(struct proc *p)
   p->trapframe = 0;
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
+  if(p->kernel_pagetable)
+    proc_freekernelpagetable(p);
   p->pagetable = 0;
+  p->kernel_pagetable = 0;
   p->sz = 0;
   p->pid = 0;
   p->parent = 0;
@@ -193,6 +209,29 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
   uvmfree(pagetable, sz);
+}
+
+void
+proc_freekernelpagetable(struct proc *p)
+{
+  pagetable_t pkernel_pagetable = p->kernel_pagetable;
+  // uart registers
+  ukvmunmap(pkernel_pagetable, UART0, PGSIZE);
+  // virtio mmio disk interface
+  ukvmunmap(pkernel_pagetable, VIRTIO0, PGSIZE);
+  // CLINT
+  ukvmunmap(pkernel_pagetable, CLINT, 0x10000);
+  // PLIC
+  ukvmunmap(pkernel_pagetable, PLIC, 0x400000);
+  // map kernel text executable and read-only.
+  ukvmunmap(pkernel_pagetable, KERNBASE, (uint64)etext-KERNBASE);
+  // map kernel data and the physical RAM we'll make use of.
+  ukvmunmap(pkernel_pagetable,(uint64)etext, PHYSTOP - (uint64)etext);
+  // map the trampoline for trap entry/exit to
+  // the highest virtual address in the kernel.
+  ukvmunmap(pkernel_pagetable, TRAMPOLINE, PGSIZE);
+  ukvmunmap(pkernel_pagetable, p->kstack, PGSIZE);
+  freewalk(pkernel_pagetable);
 }
 
 // a user program that calls exec("/init")
@@ -473,6 +512,10 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+
+        w_satp(MAKE_SATP(p->kernel_pagetable));
+        sfence_vma();
+
         swtch(&c->context, &p->context);
 
         // Process is done running for now.
@@ -485,6 +528,8 @@ scheduler(void)
     }
 #if !defined (LAB_FS)
     if(found == 0) {
+      w_satp(MAKE_SATP(kernel_pagetable));
+      sfence_vma();
       intr_on();
       asm volatile("wfi");
     }
