@@ -1,0 +1,2 @@
+1.easy to see, not explain
+2.plus may overflow;srcva =0xffff...e(64bit) , len = 2

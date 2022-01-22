@@ -13,6 +13,10 @@ struct mbuf;
 struct sock;
 #endif
 
+// vmcopyin.c
+int             copyin_new(pagetable_t, char *, uint64, uint64);
+int             copyinstr_new(pagetable_t, char *, uint64, uint64);
+
 // bio.c
 void            binit(void);
 struct buf*     bread(uint, uint);
@@ -186,6 +190,8 @@ int             copyinstr(pagetable_t, char *, uint64, uint64);
 void            vmprint(pagetable_t pagetable);
 void            freewalk(pagetable_t pagetable);
 pte_t*          walk(pagetable_t, uint64, int);
+int             ptmappings(pagetable_t, pagetable_t, uint64, uint64);
+uint64          ukvmdealloc(pagetable_t, uint64, uint64);
 
 // plic.c
 void            plicinit(void);
